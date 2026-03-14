@@ -1,0 +1,185 @@
+# zenmux-adapter
+
+[![Build](https://github.com/aitiotekt/zenmux-adapter/actions/workflows/release.yml/badge.svg)](https://github.com/aitiotekt/zenmux-adapter/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/aitiotekt/zenmux-adapter)](https://github.com/aitiotekt/zenmux-adapter/releases/latest)
+
+`zenmux-adapter` is a Rust CLI for generating AI tool configuration files from the ZenMux model catalog, now support:
+
+- OpenClaw
+
+It fetches the live model list from:
+
+- `https://zenmux.ai/api/v1/models`
+
+Then it converts the selected models into the target AI tool configuration format.
+
+> 中文文档请见 [README_zh.md](./README_zh.md)
+
+---
+
+## Download (Pre-built Binaries)
+
+Pre-built binaries for all major platforms are published on the
+[Releases](https://github.com/aitiotekt/zenmux-adapter/releases) page.
+
+| Platform | File |
+|---|---|
+| Linux x86_64 | `zenmux-adapter-<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux aarch64 | `zenmux-adapter-<version>-aarch64-unknown-linux-musl.tar.gz` |
+| macOS Intel | `zenmux-adapter-<version>-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `zenmux-adapter-<version>-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `zenmux-adapter-<version>-x86_64-pc-windows-msvc.zip` |
+| Windows ARM64 | `zenmux-adapter-<version>-aarch64-pc-windows-msvc.zip` |
+
+Download, extract, and place `zenmux-adapter` (or `zenmux-adapter.exe`) somewhere on your `PATH`.
+
+---
+
+## Quick Start (OpenClaw)
+
+### 1 – Generate a config
+
+Pick models interactively and set your API key in one step:
+
+```bash
+zenmux-adapter openclaw generate --interactive
+```
+
+You will be prompted to:
+1. Select models from a searchable TUI list.
+2. Optionally enter your ZenMux API key (press Enter to keep the placeholder and set it at install time).
+
+Generate with all models and supply the key upfront:
+
+```bash
+zenmux-adapter openclaw generate --all-models --api-key sk-ss-v1-xxxx
+```
+
+### 2 – Install the config
+
+Copy the generated file to where OpenClaw expects it and inject the API key
+(if you kept the placeholder during generation):
+
+```bash
+# Interactive – prompts for the key if the placeholder is still present
+zenmux-adapter openclaw install zenmux-openclaw-interative.json \
+  --dest ~/.config/openclaw/config.json
+
+# Non-interactive – key must be supplied on the command line
+zenmux-adapter openclaw install zenmux-openclaw-interative.json \
+  --dest ~/.config/openclaw/config.json \
+  --api-key sk-ss-v1-xxxx \
+  --non-interactive
+```
+
+### 3 – Uninstall the config
+
+```bash
+zenmux-adapter openclaw uninstall ~/.config/openclaw/config.json
+```
+
+---
+
+## Build
+
+```bash
+cargo build --release
+```
+
+The resulting binary is at `target/release/zenmux-adapter`.
+
+## Developer Usage
+
+Top-level help:
+
+```bash
+cargo run -- --help
+```
+
+OpenClaw subcommand help:
+
+```bash
+cargo run -- openclaw generate --help
+cargo run -- openclaw install --help
+cargo run -- openclaw uninstall --help
+```
+
+Current command shape:
+
+```
+zenmux-adapter openclaw generate   [OPTIONS] <--all-models|--interactive|--models <MODEL_ID>...>
+zenmux-adapter openclaw install    [OPTIONS] <CONFIG_FILE> --dest <DEST>
+zenmux-adapter openclaw uninstall  <DEST>
+```
+
+### Generate With All Models
+
+```bash
+cargo run -- openclaw generate --all-models
+```
+
+Default output: `zenmux-openclaw-all.json`
+
+Custom output:
+
+```bash
+cargo run -- openclaw generate --all-models --output custom-openclaw.json
+```
+
+### Generate With Interactive Selection
+
+```bash
+cargo run -- openclaw generate --interactive
+```
+
+Interactive mode supports in-place TUI filtering. Type to filter candidates by
+model ID, display name, or input modality; use space to toggle models; press
+Enter to confirm. After model selection you will be prompted for an optional
+API key (press Enter to keep the placeholder).
+
+Default output: `zenmux-openclaw-interative.json`
+
+### Generate With Explicit Model IDs
+
+Comma-separated:
+
+```bash
+cargo run -- openclaw generate --models openai/gpt-5.4,anthropic/claude-sonnet-4.6
+```
+
+Repeated flag:
+
+```bash
+cargo run -- openclaw generate \
+  --models openai/gpt-5.4 \
+  --models anthropic/claude-sonnet-4.6
+```
+
+## Options – generate
+
+| Flag | Default | Description |
+|---|---|---|
+| `--all-models` | – | Include all models returned by ZenMux |
+| `--interactive` | – | Choose models in an interactive selector |
+| `--models` | – | Include only the specified model IDs |
+| `--output` / `-o` | auto | Write to a custom file path |
+| `--models-api` | ZenMux endpoint | Override the model list API endpoint |
+| `--base-url` | ZenMux API base | Override the OpenClaw provider `baseUrl` |
+| `--api-key` | placeholder | Set the OpenClaw provider `apiKey` |
+| `--max-tokens` | `8192` | Set `maxTokens` for generated models |
+
+## Options – install
+
+| Flag | Description |
+|---|---|
+| `<CONFIG_FILE>` | Path to the generated OpenClaw JSON file |
+| `--dest` | Destination path to install to |
+| `--api-key` | API key to inject (replaces placeholder) |
+| `--non-interactive` | Fail instead of prompting when key is missing |
+
+## Notes
+
+- One of `--all-models`, `--interactive`, or `--models` is required for `generate`.
+- The CLI sorts ZenMux models by `created` descending to match the "newest" ordering.
+- ZenMux pricing can contain multiple tiers. This tool collapses those tiers into single representative values for the OpenClaw `cost` fields.
+- The generated provider name is `zenmux`.
