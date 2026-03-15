@@ -55,27 +55,37 @@ Generate with all models and supply the key upfront:
 zenmux-adapter openclaw generate --all-models --api-key sk-ss-v1-xxxx
 ```
 
-### 2 – Install the config
+### 2 – Install (merge into OpenClaw config)
 
-Copy the generated file to where OpenClaw expects it and inject the API key
-(if you kept the placeholder during generation):
+Merge the ZenMux provider and model entries into your existing OpenClaw config.
+If the file does not exist it will be created. You can optionally set the API key
+and choose a primary model (the current primary is moved to fallback):
 
 ```bash
-# Interactive – prompts for the key if the placeholder is still present
-zenmux-adapter openclaw install zenmux-openclaw-interative.json \
-  --dest ~/.config/openclaw/config.json
+# Interactive – prompts for key and primary model selection
+# Defaults to ~/.openclaw/openclaw.json
+zenmux-adapter openclaw install zenmux-openclaw-interative.json
 
-# Non-interactive – key must be supplied on the command line
+# Non-interactive – supply key, primary, and custom dest
 zenmux-adapter openclaw install zenmux-openclaw-interative.json \
   --dest ~/.config/openclaw/config.json \
   --api-key sk-ss-v1-xxxx \
+  --primary zenmux/openai/gpt-5.4 \
   --non-interactive
 ```
 
-### 3 – Uninstall the config
+### 3 – Uninstall (remove ZenMux entries)
+
+Remove ZenMux provider and model entries from the config. If the primary model
+was provided by ZenMux the CLI will restore it from the fallback list or prompt
+you to pick a replacement:
 
 ```bash
-zenmux-adapter openclaw uninstall ~/.config/openclaw/config.json
+# Interactive – prompts for primary replacement (default dest)
+zenmux-adapter openclaw uninstall
+
+# Non-interactive – auto-picks first fallback or first remaining model
+zenmux-adapter openclaw uninstall --dest ~/.config/openclaw/config.json --non-interactive
 ```
 
 ---
@@ -109,7 +119,7 @@ Current command shape:
 ```
 zenmux-adapter openclaw generate   [OPTIONS] <--all-models|--interactive|--models <MODEL_ID>...>
 zenmux-adapter openclaw install    [OPTIONS] <CONFIG_FILE> --dest <DEST>
-zenmux-adapter openclaw uninstall  <DEST>
+zenmux-adapter openclaw uninstall  [OPTIONS] <DEST>
 ```
 
 ### Generate With All Models
@@ -172,10 +182,18 @@ cargo run -- openclaw generate \
 
 | Flag | Description |
 |---|---|
-| `<CONFIG_FILE>` | Path to the generated OpenClaw JSON file |
-| `--dest` | Destination path to install to |
-| `--api-key` | API key to inject (replaces placeholder) |
+| `<CONFIG_FILE>` | Path to the generated ZenMux OpenClaw JSON file |
+| `--dest` / `-d` | Target OpenClaw config file (default: `~/.openclaw/openclaw.json`) |
+| `--api-key` | API key to inject into the ZenMux provider (replaces placeholder) |
+| `--primary` | Model key to set as primary; old primary moves to fallback |
 | `--non-interactive` | Fail instead of prompting when key is missing |
+
+## Options – uninstall
+
+| Flag | Description |
+|---|---|
+| `--dest` / `-d` | Target OpenClaw config file (default: `~/.openclaw/openclaw.json`) |
+| `--non-interactive` | Auto-pick replacement primary from fallback/models list |
 
 ## Notes
 

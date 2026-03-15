@@ -13,9 +13,34 @@ env:
   BINARY_NAME: zenmux-adapter
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: Run tests
+        run: cargo test --all-features
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -98,7 +123,6 @@ jobs:
           ASSET="${{ env.BINARY_NAME }}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
           cd target/${{ matrix.target }}/release
           tar czf "../../../${ASSET}" ${{ env.BINARY_NAME }}
-          echo "ASSET=${ASSET}" >> $GITHUB_ENV
 
       - name: Package (Windows)
         if: matrix.archive == 'zip'
@@ -108,13 +132,12 @@ jobs:
           Compress-Archive `
             -Path "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe" `
             -DestinationPath $asset
-          "ASSET=$asset" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: ${{ env.ASSET }}
+          path: ${{ env.BINARY_NAME }}-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
           if-no-files-found: error
 
   # ── Publish GitHub Release ─────────────────────────────────────────────────

@@ -55,26 +55,36 @@ zenmux-adapter openclaw generate --interactive
 zenmux-adapter openclaw generate --all-models --api-key sk-ss-v1-xxxx
 ```
 
-### 第二步 – 安装配置
+### 第二步 – 安装（合并到 OpenClaw 配置）
 
-将生成的配置文件复制到 OpenClaw 所需路径，并在此时注入 API key（如果生成时保留了占位符）：
+将 ZenMux provider 和模型条目合并到已有的 OpenClaw 配置文件中。
+如果目标文件不存在则自动创建。可选设置 API key 和主模型
+（原 primary 将被移入 fallback 列表首位）：
 
 ```bash
-# 交互模式 – 如果占位符仍存在则自动提示输入 key
-zenmux-adapter openclaw install zenmux-openclaw-interative.json \
-  --dest ~/.config/openclaw/config.json
+# 交互模式 – 提示输入 key 及选择主模型
+# 默认目标 ~/.openclaw/openclaw.json
+zenmux-adapter openclaw install zenmux-openclaw-interative.json
 
-# 非交互模式 – key 必须通过命令行参数传入
+# 非交互模式 – 通过命令行指定 key、primary 和自定义目标路径
 zenmux-adapter openclaw install zenmux-openclaw-interative.json \
   --dest ~/.config/openclaw/config.json \
   --api-key sk-ss-v1-xxxx \
+  --primary zenmux/openai/gpt-5.4 \
   --non-interactive
 ```
 
-### 第三步 – 卸载配置
+### 第三步 – 卸载（移除 ZenMux 条目）
+
+从配置文件中移除 ZenMux provider 和模型条目。如果当前主模型来自 ZenMux，
+CLI 会从 fallback 列表或剩余可用模型中恢复 primary：
 
 ```bash
-zenmux-adapter openclaw uninstall ~/.config/openclaw/config.json
+# 交互模式 – 提示选择替代主模型（默认目标）
+zenmux-adapter openclaw uninstall
+
+# 非交互模式 – 自动选择 fallback 中第一个或剩余 models 的第一个
+zenmux-adapter openclaw uninstall --dest ~/.config/openclaw/config.json --non-interactive
 ```
 
 ---
@@ -108,7 +118,7 @@ cargo run -- openclaw uninstall --help
 ```
 zenmux-adapter openclaw generate   [OPTIONS] <--all-models|--interactive|--models <MODEL_ID>...>
 zenmux-adapter openclaw install    [OPTIONS] <CONFIG_FILE> --dest <DEST>
-zenmux-adapter openclaw uninstall  <DEST>
+zenmux-adapter openclaw uninstall  [OPTIONS] <DEST>
 ```
 
 ### 生成全量模型配置
@@ -168,10 +178,18 @@ cargo run -- openclaw generate \
 
 | 参数 | 说明 |
 |---|---|
-| `<CONFIG_FILE>` | 生成的 OpenClaw JSON 配置文件路径 |
-| `--dest` | 安装目标路径 |
-| `--api-key` | 要注入的 API key（替换占位符） |
+| `<CONFIG_FILE>` | 生成的 ZenMux OpenClaw JSON 配置文件路径 |
+| `--dest` / `-d` | 目标 OpenClaw 配置文件（默认：`~/.openclaw/openclaw.json`） |
+| `--api-key` | 要注入 ZenMux provider 的 API key（替换占位符） |
+| `--primary` | 设置为主模型的 key；原 primary 移入 fallback |
 | `--non-interactive` | key 缺失时直接报错而不提示 |
+
+## 参数说明 – uninstall
+
+| 参数 | 说明 |
+|---|---|
+| `--dest` / `-d` | 目标 OpenClaw 配置文件（默认：`~/.openclaw/openclaw.json`） |
+| `--non-interactive` | 自动从 fallback/models 列表中选择替代 primary |
 
 ## 说明
 

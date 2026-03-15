@@ -1,19 +1,12 @@
-use std::{collections::BTreeMap, fmt, fs, path::PathBuf};
+use std::env;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use inquire::{MultiSelect, Password, Text};
+use inquire::{MultiSelect, Password, Select, Text};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
 
-const MODELS_API_URL: &str = "https://zenmux.ai/api/v1/models";
-const PROVIDER_BASE_URL: &str = "https://zenmux.ai/api/v1";
-const PROVIDER_NAME: &str = "zenmux";
-const API_PLACEHOLDER: &str = "sk-ss-v1-your-api-key-here";
-const OPENCLAW_API_KIND: &str = "openai-completions";
-const DEFAULT_MAX_TOKENS: u64 = 8192;
-const DEFAULT_ALL_OUTPUT: &str = "zenmux-openclaw-all.json";
-const DEFAULT_INTERACTIVE_OUTPUT: &str = "zenmux-openclaw-interative.json";
+use zenmux_adapter::*;
 
 // ── CLI structure ──────────────────────────────────────────────────────────────
 
@@ -89,22 +82,30 @@ struct GenerateOpenClawArgs {
 // ── Subcommand: install ────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
-#[command(about = "Install (copy) a generated OpenClaw config to a target path.")]
+#[command(about = "Merge a generated ZenMux config into an existing OpenClaw config file.")]
 struct InstallOpenClawArgs {
-    /// Path to the generated OpenClaw JSON config file.
+    /// Path to the generated ZenMux OpenClaw JSON config file.
     #[arg(value_name = "CONFIG_FILE")]
     config_file: PathBuf,
 
-    /// Destination path to install the config to.
+    /// Path to the target OpenClaw config file.
+    /// Defaults to ~/.openclaw/openclaw.json.
+    /// The file will be created if it does not yet exist.
     #[arg(short, long, value_name = "DEST")]
-    dest: PathBuf,
+    dest: Option<PathBuf>,
 
-    /// API key to inject into the config before installing.
-    /// Required when the config still contains the default placeholder.
+    /// API key to inject into the ZenMux provider.
+    /// Required when the source config still contains the default placeholder.
     /// In non-interactive mode this flag is mandatory if the key is missing.
     /// In interactive mode the CLI will prompt if this flag is omitted.
     #[arg(long, value_name = "KEY")]
     api_key: Option<String>,
+
+    /// Model key to set as the new primary model.
+    /// The current primary is moved to the front of the fallback list.
+    /// In interactive mode a single-select prompt is shown if this is omitted.
+    #[arg(long, value_name = "MODEL_KEY")]
+    primary: Option<String>,
 
     /// Run non-interactively. Fails immediately if --api-key is required but
     /// not supplied on the command line.
@@ -115,133 +116,18 @@ struct InstallOpenClawArgs {
 // ── Subcommand: uninstall ──────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
-#[command(about = "Uninstall (remove) an OpenClaw config from a target path.")]
+#[command(about = "Remove ZenMux entries from an OpenClaw config and restore the primary model.")]
 struct UninstallOpenClawArgs {
-    /// Path of the installed config file to remove.
-    #[arg(value_name = "DEST")]
-    dest: PathBuf,
-}
+    /// Path to the OpenClaw config file.
+    /// Defaults to ~/.openclaw/openclaw.json.
+    #[arg(short, long, value_name = "DEST")]
+    dest: Option<PathBuf>,
 
-// ── ZenMux API types ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct ZenMuxModelsResponse {
-    data: Vec<ZenMuxModel>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ZenMuxModel {
-    id: String,
-    display_name: String,
-    created: i64,
-    #[serde(default)]
-    input_modalities: Vec<String>,
-    #[serde(default)]
-    capabilities: ModelCapabilities,
-    #[serde(default)]
-    context_length: u64,
-    #[serde(default)]
-    pricings: ModelPricings,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct ModelCapabilities {
-    #[serde(default)]
-    reasoning: bool,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct ModelPricings {
-    #[serde(default)]
-    prompt: Vec<PricingTier>,
-    #[serde(default)]
-    completion: Vec<PricingTier>,
-    #[serde(default)]
-    input_cache_read: Vec<PricingTier>,
-    #[serde(default)]
-    input_cache_write: Vec<PricingTier>,
-    #[serde(default)]
-    input_cache_write_1_h: Vec<PricingTier>,
-    #[serde(default)]
-    input_cache_write_5_min: Vec<PricingTier>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct PricingTier {
-    value: f64,
-}
-
-// ── OpenClaw config types ─────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawRoot {
-    models: OpenClawModelsSection,
-    agents: OpenClawAgentsSection,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawModelsSection {
-    mode: String,
-    providers: BTreeMap<String, OpenClawProvider>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawProvider {
-    #[serde(rename = "baseUrl")]
-    base_url: String,
-    #[serde(rename = "apiKey")]
-    api_key: String,
-    api: String,
-    models: Vec<OpenClawModel>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawModel {
-    id: String,
-    name: String,
-    reasoning: bool,
-    input: Vec<String>,
-    cost: OpenClawCost,
-    #[serde(rename = "contextWindow")]
-    context_window: u64,
-    #[serde(rename = "maxTokens")]
-    max_tokens: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawCost {
-    input: f64,
-    output: f64,
-    #[serde(rename = "cacheRead")]
-    cache_read: f64,
-    #[serde(rename = "cacheWrite")]
-    cache_write: f64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawAgentsSection {
-    defaults: OpenClawAgentDefaults,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawAgentDefaults {
-    model: OpenClawPrimaryModel,
-    models: BTreeMap<String, EmptyModelConfig>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OpenClawPrimaryModel {
-    primary: String,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct EmptyModelConfig {}
-
-// ── Interactive model selector display ────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-struct SelectableModel {
-    model: ZenMuxModel,
+    /// Run non-interactively. Uses the first fallback or first remaining
+    /// model key when restoring the primary. Clears primary if nothing
+    /// is available.
+    #[arg(long)]
+    non_interactive: bool,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -292,9 +178,12 @@ fn run_openclaw_generate(args: GenerateOpenClawArgs) -> Result<()> {
     };
 
     let config = build_openclaw_config(&selected_models, args.base_url, api_key, args.max_tokens);
-    let json = serde_json::to_string_pretty(&config)?;
-    fs::write(&output_path, json)
-        .with_context(|| format!("failed to write {}", output_path.display()))?;
+
+    let op = fs_operator()?;
+    let path_str = output_path
+        .to_str()
+        .context("output path is not valid UTF-8")?;
+    write_openclaw_config(&op, path_str, &config)?;
 
     println!(
         "Wrote {} models to {}",
@@ -308,14 +197,25 @@ fn run_openclaw_generate(args: GenerateOpenClawArgs) -> Result<()> {
 // ── Command: install ──────────────────────────────────────────────────────────
 
 fn run_openclaw_install(args: InstallOpenClawArgs) -> Result<()> {
-    // Read and parse the source config
-    let raw = fs::read_to_string(&args.config_file)
-        .with_context(|| format!("failed to read {}", args.config_file.display()))?;
-    let mut config: OpenClawRoot =
-        serde_json::from_str(&raw).context("failed to parse OpenClaw config JSON")?;
+    let dest = resolve_openclaw_config_path(args.dest)?;
+    let op = fs_operator()?;
 
-    // Check whether any provider still has the placeholder key
-    let needs_key = config
+    // Read source config to check if API key needs injection
+    let src_path = args
+        .config_file
+        .to_str()
+        .context("config_file path is not valid UTF-8")?;
+    let src_raw = storage_read(&op, src_path)?.with_context(|| {
+        format!(
+            "source config {} does not exist",
+            args.config_file.display()
+        )
+    })?;
+    let src: OpenClawRoot =
+        serde_json::from_str(&src_raw).context("failed to parse source OpenClaw config JSON")?;
+
+    // ── API key resolution ───────────────────────────────────────────────
+    let needs_key = src
         .models
         .providers
         .values()
@@ -326,44 +226,70 @@ fn run_openclaw_install(args: InstallOpenClawArgs) -> Result<()> {
     } else if needs_key {
         if args.non_interactive {
             bail!(
-                "The config file contains the default API key placeholder.\n\
+                "The source config contains the default API key placeholder.\n\
                  Supply --api-key <KEY> or run without --non-interactive to be prompted."
             );
         }
-        // Interactive prompt – mandatory (empty input is not accepted)
-        let key = Password::new("ZenMux API key (required – config contains placeholder):")
+        let key = Password::new("ZenMux API key (required – source config contains placeholder):")
             .without_confirmation()
             .prompt()
             .context("failed to read API key input")?;
         if key.trim().is_empty() {
-            bail!("API key must not be empty when the config still contains the placeholder.");
+            bail!(
+                "API key must not be empty when the source config still contains the placeholder."
+            );
         }
         Some(key)
     } else {
         None
     };
 
-    // Inject the key into every provider
-    if let Some(key) = api_key {
-        for provider in config.models.providers.values_mut() {
-            provider.api_key = key.clone();
+    // ── Primary model selection ──────────────────────────────────────────
+    // Read dest to get available keys for interactive selection
+    let primary = if args.primary.is_some() {
+        args.primary
+    } else if !args.non_interactive {
+        // We need to know available keys for interactive selection.
+        // Read dest + source to merge them temporarily.
+        let dest_raw = storage_read(&op, &dest)?;
+        let mut dest_models: Vec<String> = Vec::new();
+
+        if let Some(raw) = &dest_raw
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+            && let Some(models) = v
+                .get("agents")
+                .and_then(|a| a.get("defaults"))
+                .and_then(|d| d.get("models"))
+                .and_then(|m| m.as_object())
+        {
+            dest_models.extend(models.keys().cloned());
         }
-    }
 
-    // Create parent dirs and write the config
-    if let Some(parent) = args.dest.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
+        // Add source model keys
+        for key in src.agents.defaults.models.keys() {
+            if !dest_models.contains(key) {
+                dest_models.push(key.clone());
+            }
+        }
 
-    let json = serde_json::to_string_pretty(&config)?;
-    fs::write(&args.dest, json)
-        .with_context(|| format!("failed to write {}", args.dest.display()))?;
+        if !dest_models.is_empty() {
+            Select::new(
+                "Select the primary model (↑↓ to move, Enter to confirm, Esc to keep current):",
+                dest_models,
+            )
+            .with_page_size(20)
+            .prompt_skippable()
+            .context("failed to read primary model selection")?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
-    println!(
-        "Installed OpenClaw config to {}",
-        args.dest.display()
-    );
+    install_openclaw(&op, src_path, &dest, api_key, primary)?;
+
+    println!("Merged ZenMux config into {dest}");
 
     Ok(())
 }
@@ -371,22 +297,109 @@ fn run_openclaw_install(args: InstallOpenClawArgs) -> Result<()> {
 // ── Command: uninstall ────────────────────────────────────────────────────────
 
 fn run_openclaw_uninstall(args: UninstallOpenClawArgs) -> Result<()> {
-    if !args.dest.exists() {
-        bail!(
-            "Config file {} does not exist – nothing to uninstall.",
-            args.dest.display()
-        );
+    let dest = resolve_openclaw_config_path(args.dest)?;
+    let op = fs_operator()?;
+
+    let primary_choice = if args.non_interactive {
+        // Non-interactive: the core function auto-picks first fallback
+        None
+    } else {
+        // Read the config first to know if we need to prompt
+        let raw = storage_read(&op, &dest)?
+            .with_context(|| format!("config {dest} does not exist – nothing to uninstall"))?;
+        let target: serde_json::Value = serde_json::from_str(&raw)?;
+
+        let primary_is_zenmux = target
+            .get("agents")
+            .and_then(|a| a.get("defaults"))
+            .and_then(|d| d.get("model"))
+            .and_then(|m| m.get("primary"))
+            .and_then(|p| p.as_str())
+            .map(|s| s.starts_with(ZENMUX_KEY_PREFIX))
+            .unwrap_or(false);
+
+        if primary_is_zenmux {
+            // Build candidate list for interactive selection
+            let model_section = target
+                .get("agents")
+                .and_then(|a| a.get("defaults"))
+                .and_then(|d| d.get("model"));
+
+            let mut candidates: Vec<String> = model_section
+                .and_then(|m| m.get("fallbacks"))
+                .and_then(|f| f.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .filter(|s| !s.starts_with(ZENMUX_KEY_PREFIX))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let remaining_keys: Vec<String> = target
+                .get("agents")
+                .and_then(|a| a.get("defaults"))
+                .and_then(|d| d.get("models"))
+                .and_then(|m| m.as_object())
+                .map(|m| {
+                    m.keys()
+                        .filter(|k| !k.starts_with(ZENMUX_KEY_PREFIX))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            for key in &remaining_keys {
+                if !candidates.contains(key) {
+                    candidates.push(key.clone());
+                }
+            }
+
+            if candidates.is_empty() {
+                None
+            } else {
+                Select::new(
+                    "The primary model was a ZenMux model. Select a replacement:",
+                    candidates,
+                )
+                .with_page_size(20)
+                .prompt_skippable()
+                .context("failed to read primary model selection")?
+            }
+        } else {
+            None
+        }
+    };
+
+    let (action, _) = uninstall_openclaw(&op, &dest, primary_choice)?;
+
+    match action {
+        UninstallPrimaryAction::Restored(key) => {
+            println!("Primary model restored to: {key}");
+        }
+        UninstallPrimaryAction::Cleared => {
+            println!("No alternative models available – primary field removed.");
+        }
+        UninstallPrimaryAction::Unchanged => {}
     }
 
-    fs::remove_file(&args.dest)
-        .with_context(|| format!("failed to remove {}", args.dest.display()))?;
-
-    println!("Uninstalled OpenClaw config from {}", args.dest.display());
+    println!("Removed ZenMux entries from {dest}");
 
     Ok(())
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── CLI helpers ───────────────────────────────────────────────────────────────
+
+fn resolve_openclaw_config_path(dest: Option<PathBuf>) -> Result<String> {
+    if let Some(path) = dest {
+        return path
+            .to_str()
+            .map(|s| s.to_string())
+            .context("dest path is not valid UTF-8");
+    }
+    let home = env::var("HOME").context("HOME environment variable is not set")?;
+    Ok(format!("{home}/{DEFAULT_OPENCLAW_CONFIG}"))
+}
 
 fn fetch_models(models_api: &str) -> Result<Vec<ZenMuxModel>> {
     let client = Client::builder()
@@ -410,36 +423,6 @@ fn fetch_models(models_api: &str) -> Result<Vec<ZenMuxModel>> {
         .context("failed to decode ZenMux models payload")?;
 
     Ok(payload.data)
-}
-
-fn sort_models_by_newest(models: &mut [ZenMuxModel]) {
-    models.sort_by(|left, right| {
-        right
-            .created
-            .cmp(&left.created)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-}
-
-fn select_models_by_id(
-    models: &[ZenMuxModel],
-    requested_ids: &[String],
-) -> Result<Vec<ZenMuxModel>> {
-    let mut selected = Vec::new();
-    let mut missing = Vec::new();
-
-    for requested_id in requested_ids {
-        match models.iter().find(|model| model.id == *requested_id) {
-            Some(model) => selected.push(model.clone()),
-            None => missing.push(requested_id.clone()),
-        }
-    }
-
-    if !missing.is_empty() {
-        bail!("Unknown model ids: {}", missing.join(", "));
-    }
-
-    Ok(selected)
 }
 
 fn prompt_for_models(models: &[ZenMuxModel]) -> Result<Vec<ZenMuxModel>> {
@@ -473,130 +456,5 @@ fn prompt_optional_api_key() -> Result<String> {
         Ok(API_PLACEHOLDER.to_string())
     } else {
         Ok(key)
-    }
-}
-
-fn format_selector_label(model: &ZenMuxModel) -> String {
-    let reasoning = if model.capabilities.reasoning {
-        "reasoning"
-    } else {
-        "standard"
-    };
-
-    format!(
-        "{} | {} | ctx={} | inputs={}",
-        model.display_name,
-        reasoning,
-        format_context_window(model.context_length),
-        model.input_modalities.join(",")
-    )
-}
-
-impl fmt::Display for SelectableModel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&format_selector_label(&self.model))
-    }
-}
-
-fn build_openclaw_config(
-    models: &[ZenMuxModel],
-    base_url: String,
-    api_key: String,
-    max_tokens: u64,
-) -> OpenClawRoot {
-    let provider_models = models
-        .iter()
-        .map(|model| OpenClawModel {
-            id: model.id.clone(),
-            name: format!("{} via ZenMux", trimmed_display_name(&model.display_name)),
-            reasoning: model.capabilities.reasoning,
-            input: if model.input_modalities.is_empty() {
-                vec!["text".to_string()]
-            } else {
-                model.input_modalities.clone()
-            },
-            cost: OpenClawCost {
-                input: representative_price(&model.pricings.prompt),
-                output: representative_price(&model.pricings.completion),
-                cache_read: representative_price(&model.pricings.input_cache_read),
-                cache_write: representative_cache_write_price(&model.pricings),
-            },
-            context_window: model.context_length,
-            max_tokens: max_tokens.min(model.context_length.max(1)),
-        })
-        .collect::<Vec<_>>();
-
-    let mut providers = BTreeMap::new();
-    providers.insert(
-        PROVIDER_NAME.to_string(),
-        OpenClawProvider {
-            base_url,
-            api_key,
-            api: OPENCLAW_API_KIND.to_string(),
-            models: provider_models,
-        },
-    );
-
-    let agent_models = models
-        .iter()
-        .map(|model| (agent_model_key(&model.id), EmptyModelConfig::default()))
-        .collect::<BTreeMap<_, _>>();
-
-    OpenClawRoot {
-        models: OpenClawModelsSection {
-            mode: "merge".to_string(),
-            providers,
-        },
-        agents: OpenClawAgentsSection {
-            defaults: OpenClawAgentDefaults {
-                model: OpenClawPrimaryModel {
-                    primary: agent_model_key(&models[0].id),
-                },
-                models: agent_models,
-            },
-        },
-    }
-}
-
-fn representative_price(tiers: &[PricingTier]) -> f64 {
-    tiers
-        .iter()
-        .map(|tier| tier.value)
-        .reduce(f64::min)
-        .unwrap_or(0.0)
-}
-
-fn representative_cache_write_price(pricings: &ModelPricings) -> f64 {
-    let candidates = [
-        representative_price(&pricings.input_cache_write),
-        representative_price(&pricings.input_cache_write_1_h),
-        representative_price(&pricings.input_cache_write_5_min),
-    ];
-
-    candidates
-        .into_iter()
-        .filter(|value| *value > 0.0)
-        .reduce(f64::min)
-        .unwrap_or(0.0)
-}
-
-fn trimmed_display_name(display_name: &str) -> &str {
-    display_name
-        .split_once(':')
-        .map(|(_, name)| name.trim())
-        .unwrap_or(display_name)
-}
-
-fn agent_model_key(model_id: &str) -> String {
-    format!("{PROVIDER_NAME}/{model_id}")
-}
-
-fn format_context_window(value: u64) -> String {
-    if value >= 1_000_000 {
-        format!("{:.2}M", value as f64 / 1_000_000.0)
-    } else if value >= 1_000 {
-        format!("{:.2}K", value as f64 / 1_000.0)
-    } else {
-        value.to_string()
     }
 }
