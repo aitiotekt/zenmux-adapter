@@ -17,6 +17,27 @@ Then it converts the selected models into the target AI tool configuration forma
 
 ---
 
+## Quick Install
+
+**Linux / macOS**
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf \
+  https://raw.githubusercontent.com/aitiotekt/zenmux-adapter/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/aitiotekt/zenmux-adapter/main/scripts/install.ps1 | iex
+```
+
+Both scripts automatically detect your platform and architecture, download the latest release from
+GitHub, and install the binary to `~/.local/bin/zenmux-adapter` (or
+`%USERPROFILE%\.local\bin\zenmux-adapter.exe` on Windows). An existing binary is overwritten.
+
+---
+
 ## Download (Pre-built Binaries)
 
 Pre-built binaries for all major platforms are published on the

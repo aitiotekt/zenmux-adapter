@@ -17,6 +17,25 @@
 
 ---
 
+## 快速安装
+
+**Linux / macOS**
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf \
+  https://raw.githubusercontent.com/aitiotekt/zenmux-adapter/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/aitiotekt/zenmux-adapter/main/scripts/install.ps1 | iex
+```
+
+以上脚本会自动检测您的平台和架构，从 GitHub 下载最新版本，并安装到 `~/.local/bin/zenmux-adapter`（在 Windows 上为 `%USERPROFILE%\.local\bin\zenmux-adapter.exe`）。如果文件已存在，则会覆盖。
+
+---
+
 ## 下载（预构建二进制）
 
 各平台的预构建二进制文件已发布在
