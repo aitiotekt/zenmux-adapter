@@ -261,8 +261,9 @@ pub fn install_openclaw(
 
     // 3. Read (or create) the target OpenClaw config as Value
     let mut target: Value = match storage_read(op, dest_path)? {
-        Some(raw) => serde_json::from_str(&raw)
-            .context("failed to parse target OpenClaw config JSON")?,
+        Some(raw) => {
+            serde_json::from_str(&raw).context("failed to parse target OpenClaw config JSON")?
+        }
         None => serde_json::json!({}),
     };
 
@@ -425,8 +426,9 @@ pub fn uninstall_openclaw(
             .unwrap_or_default();
 
         if let Some(model_section) = defaults.get_mut("model").and_then(|m| m.as_object_mut()) {
-            if let Some(fallbacks) =
-                model_section.get_mut("fallbacks").and_then(|f| f.as_array_mut())
+            if let Some(fallbacks) = model_section
+                .get_mut("fallbacks")
+                .and_then(|f| f.as_array_mut())
             {
                 fallbacks.retain(|v| {
                     v.as_str()
@@ -464,8 +466,9 @@ pub fn uninstall_openclaw(
 
                 match new_primary {
                     Some(key) => {
-                        if let Some(fallbacks) =
-                            model_section.get_mut("fallbacks").and_then(|f| f.as_array_mut())
+                        if let Some(fallbacks) = model_section
+                            .get_mut("fallbacks")
+                            .and_then(|f| f.as_array_mut())
                         {
                             fallbacks.retain(|v| v.as_str() != Some(&key));
                         }
@@ -532,11 +535,7 @@ pub fn build_openclaw_config(
             id: model.id.clone(),
             name: format!("{} via ZenMux", trimmed_display_name(&model.display_name)),
             reasoning: model.capabilities.reasoning,
-            input: if model.input_modalities.is_empty() {
-                vec!["text".to_string()]
-            } else {
-                model.input_modalities.clone()
-            },
+            input: filter_openclaw_input_modalities(&model.input_modalities),
             cost: OpenClawCost {
                 input: representative_price(&model.pricings.prompt),
                 output: representative_price(&model.pricings.completion),
@@ -624,6 +623,24 @@ pub fn format_context_window(value: u64) -> String {
     }
 }
 
+/// Keep only the input modalities that OpenClaw understands.
+/// Currently OpenClaw supports `"text"` and `"image"` only; anything else
+/// (e.g. `"audio"`, `"video"`) is silently dropped.
+/// If the filtered result is empty, fall back to `["text"]`.
+pub fn filter_openclaw_input_modalities(modalities: &[String]) -> Vec<String> {
+    const ALLOWED: &[&str] = &["text", "image"];
+    let filtered: Vec<String> = modalities
+        .iter()
+        .filter(|m| ALLOWED.contains(&m.as_str()))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        vec!["text".to_string()]
+    } else {
+        filtered
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -685,10 +702,7 @@ mod tests {
             8192,
         );
 
-        assert_eq!(
-            config.agents.defaults.model.primary,
-            "zenmux/openai/gpt-5"
-        );
+        assert_eq!(config.agents.defaults.model.primary, "zenmux/openai/gpt-5");
         assert!(config.agents.defaults.model.fallbacks.is_empty());
     }
 
@@ -752,11 +766,7 @@ mod tests {
     #[test]
     fn test_select_models_by_id_ok() {
         let models = make_two_models();
-        let selected = select_models_by_id(
-            &models,
-            &["anthropic/claude-5".to_string()],
-        )
-        .unwrap();
+        let selected = select_models_by_id(&models, &["anthropic/claude-5".to_string()]).unwrap();
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, "anthropic/claude-5");
     }
@@ -764,13 +774,13 @@ mod tests {
     #[test]
     fn test_select_models_by_id_missing() {
         let models = make_two_models();
-        let result = select_models_by_id(
-            &models,
-            &["nonexistent/model".to_string()],
-        );
+        let result = select_models_by_id(&models, &["nonexistent/model".to_string()]);
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().to_string().contains("nonexistent/model")
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("nonexistent/model")
         );
     }
 
@@ -803,6 +813,68 @@ mod tests {
             representative_price(&[PricingTier { value: 3.0 }, PricingTier { value: 1.5 }]),
             1.5
         );
+    }
+
+    // ── filter_openclaw_input_modalities tests ───────────────────────────
+
+    #[test]
+    fn test_filter_keeps_text_and_image() {
+        let modalities = vec!["text".to_string(), "image".to_string()];
+        assert_eq!(
+            filter_openclaw_input_modalities(&modalities),
+            vec!["text", "image"]
+        );
+    }
+
+    #[test]
+    fn test_filter_removes_unknown_modalities() {
+        let modalities = vec!["text".to_string(), "audio".to_string(), "video".to_string()];
+        assert_eq!(filter_openclaw_input_modalities(&modalities), vec!["text"]);
+    }
+
+    #[test]
+    fn test_filter_all_unsupported_falls_back_to_text() {
+        let modalities = vec!["audio".to_string(), "video".to_string()];
+        assert_eq!(filter_openclaw_input_modalities(&modalities), vec!["text"]);
+    }
+
+    #[test]
+    fn test_filter_empty_falls_back_to_text() {
+        assert_eq!(filter_openclaw_input_modalities(&[]), vec!["text"]);
+    }
+
+    #[test]
+    fn test_build_config_filters_input_modalities() {
+        // Model with unsupported modalities – only "text" should survive
+        let mut model = make_test_model("test/model", "Test Model", 1000);
+        model.input_modalities = vec![
+            "text".to_string(),
+            "audio".to_string(),
+            "image".to_string(),
+            "video".to_string(),
+        ];
+        let config = build_openclaw_config(
+            &[model],
+            PROVIDER_BASE_URL.to_string(),
+            API_PLACEHOLDER.to_string(),
+            8192,
+        );
+        let m = &config.models.providers[PROVIDER_NAME].models[0];
+        assert_eq!(m.input, vec!["text", "image"]);
+    }
+
+    #[test]
+    fn test_build_config_all_unsupported_modalities_default_to_text() {
+        let mut model = make_test_model("test/model", "Test Model", 1000);
+        model.input_modalities = vec!["audio".to_string(), "video".to_string()];
+        let config = build_openclaw_config(
+            &[model],
+            PROVIDER_BASE_URL.to_string(),
+            API_PLACEHOLDER.to_string(),
+            8192,
+        );
+        let m = &config.models.providers[PROVIDER_NAME].models[0];
+        assert_eq!(m.input, vec!["text"]);
     }
 
     // ── Storage-backed tests (in-memory) ─────────────────────────────────
@@ -921,8 +993,12 @@ mod tests {
                 }
             }
         });
-        storage_write(&op, "dest.json", &serde_json::to_string_pretty(&existing).unwrap())
-            .unwrap();
+        storage_write(
+            &op,
+            "dest.json",
+            &serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
 
         // Create source config
         let models = make_two_models();
@@ -951,7 +1027,9 @@ mod tests {
         assert!(dest["models"]["providers"]["zenmux"].is_object());
         // Original primary should be unchanged (no --primary passed)
         assert_eq!(
-            dest["agents"]["defaults"]["model"]["primary"].as_str().unwrap(),
+            dest["agents"]["defaults"]["model"]["primary"]
+                .as_str()
+                .unwrap(),
             "other-provider/model-a"
         );
         // zenmux model keys should be merged
@@ -1024,8 +1102,12 @@ mod tests {
                 }
             }
         });
-        storage_write(&op, "config.json", &serde_json::to_string_pretty(&config).unwrap())
-            .unwrap();
+        storage_write(
+            &op,
+            "config.json",
+            &serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
 
         let (action, _) = uninstall_openclaw(&op, "config.json", None).unwrap();
         assert!(matches!(action, UninstallPrimaryAction::Unchanged));
@@ -1077,8 +1159,12 @@ mod tests {
                 }
             }
         });
-        storage_write(&op, "config.json", &serde_json::to_string_pretty(&config).unwrap())
-            .unwrap();
+        storage_write(
+            &op,
+            "config.json",
+            &serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
 
         // Non-interactive: should auto-pick first fallback
         let (action, _) = uninstall_openclaw(&op, "config.json", None).unwrap();
@@ -1092,7 +1178,9 @@ mod tests {
         let raw = storage_read(&op, "config.json").unwrap().unwrap();
         let result: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(
-            result["agents"]["defaults"]["model"]["primary"].as_str().unwrap(),
+            result["agents"]["defaults"]["model"]["primary"]
+                .as_str()
+                .unwrap(),
             "github-copilot/gpt-5"
         );
         // First fallback promoted – should be removed from the list
@@ -1130,8 +1218,12 @@ mod tests {
                 }
             }
         });
-        storage_write(&op, "config.json", &serde_json::to_string_pretty(&config).unwrap())
-            .unwrap();
+        storage_write(
+            &op,
+            "config.json",
+            &serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
 
         let (action, _) = uninstall_openclaw(&op, "config.json", None).unwrap();
         assert!(matches!(action, UninstallPrimaryAction::Cleared));
@@ -1172,16 +1264,16 @@ mod tests {
                 }
             }
         });
-        storage_write(&op, "config.json", &serde_json::to_string_pretty(&config).unwrap())
-            .unwrap();
-
-        // Explicit choice: pick model-b instead of auto first fallback
-        let (action, _) = uninstall_openclaw(
+        storage_write(
             &op,
             "config.json",
-            Some("other/model-b".to_string()),
+            &serde_json::to_string_pretty(&config).unwrap(),
         )
         .unwrap();
+
+        // Explicit choice: pick model-b instead of auto first fallback
+        let (action, _) =
+            uninstall_openclaw(&op, "config.json", Some("other/model-b".to_string())).unwrap();
         match action {
             UninstallPrimaryAction::Restored(key) => assert_eq!(key, "other/model-b"),
             _ => panic!("expected Restored"),
@@ -1190,7 +1282,9 @@ mod tests {
         let raw = storage_read(&op, "config.json").unwrap().unwrap();
         let result: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(
-            result["agents"]["defaults"]["model"]["primary"].as_str().unwrap(),
+            result["agents"]["defaults"]["model"]["primary"]
+                .as_str()
+                .unwrap(),
             "other/model-b"
         );
     }
